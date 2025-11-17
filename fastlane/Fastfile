@@ -87,7 +87,41 @@ platform :android do
     end
 
     target = File.join(android_ci_root, 'local.properties')
-    File.write(target, "sdk.dir=#{sdk_dir}\n")
+    lines = ["sdk.dir=#{sdk_dir}"]
+
+    env_map = opts[:local_properties_env_map] || {}
+    env_map.each do |property_key, descriptor|
+      next if property_key.to_s.strip.empty?
+      value = nil
+      if descriptor.is_a?(Hash)
+        value = if descriptor[:value]
+                  descriptor[:value]
+                else
+                  ENV[descriptor[:env].to_s]
+                end
+      else
+        value = ENV[descriptor.to_s]
+      end
+
+      if value.to_s.empty?
+        FastlaneCore::UI.important("local.properties: #{property_key} missing (env #{descriptor})")
+        next
+      end
+      lines << "#{property_key}=#{value}"
+    end
+
+    static_map = opts[:local_properties_static] || {}
+    static_map.each do |property_key, value|
+      next if property_key.to_s.strip.empty? || value.nil?
+      lines << "#{property_key}=#{value}"
+    end
+
+    literal_block = opts[:local_properties_literal]
+    unless literal_block.to_s.strip.empty?
+      lines << literal_block.strip
+    end
+
+    File.write(target, lines.join("\n") + "\n")
     FastlaneCore::UI.success("Wrote #{target}")
     target
   end
