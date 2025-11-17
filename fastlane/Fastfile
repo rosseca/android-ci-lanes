@@ -1,0 +1,281 @@
+require 'base64'
+require 'fileutils'
+
+fastlane_version '2.220.0'
+
+def android_ci_root
+  (ENV['ANDROID_CI_ROOT'] || ENV['CI_PROJECT_DIR'] || ENV['CM_BUILD_DIR'] || Dir.pwd).to_s
+end
+
+def android_ci_tmp_dir
+  path = File.join(android_ci_root, 'fastlane', '.ci-cache')
+  FileUtils.mkdir_p(path)
+  path
+end
+
+def decode_payload(value, base64: true)
+  return value.to_s if value.nil?
+  return value.to_s unless base64
+  Base64.decode64(value)
+rescue ArgumentError
+  FastlaneCore::UI.important('Value did not look like Base64; falling back to raw string')
+  value.to_s
+end
+
+platform :android do
+  def __write_optional_file(env_key:, relative_path:, base64: true, raw_value: nil, verbose_name: nil)
+    payload = raw_value || ENV[env_key]
+    if payload.to_s.empty?
+      FastlaneCore::UI.important("#{verbose_name || env_key}: not configured; skipping #{relative_path}")
+      return nil
+    end
+
+    content = decode_payload(payload, base64: base64)
+    destination = File.join(android_ci_root, relative_path)
+    FileUtils.mkdir_p(File.dirname(destination))
+    File.binwrite(destination, content)
+    FastlaneCore::UI.success("Wrote #{relative_path}")
+    destination
+  end
+
+  def __materialize_secret_file(env_key:, filename: nil)
+    secret = ENV[env_key]
+    return nil if secret.to_s.strip.empty?
+
+    if File.exist?(secret)
+      FastlaneCore::UI.message("Using #{env_key} file at #{secret}")
+      return secret
+    end
+
+    fname = filename || env_key.downcase
+    target = File.join(android_ci_tmp_dir, fname)
+    File.binwrite(target, decode_payload(secret))
+    FastlaneCore::UI.message("Materialized #{env_key} into #{target}")
+    target
+  end
+
+  def __gradle_task(task:, project_dir: nil, properties: {}, flags: nil, abort_on_error: true)
+    FastlaneCore::UI.user_error!('Gradle task name is required') if task.to_s.strip.empty?
+    begin
+      gradle(
+        task: task,
+        project_dir: project_dir || android_ci_root,
+        properties: properties,
+        flags: flags,
+        print_command: true
+      )
+    rescue FastlaneCore::Interface::FastlaneShellError => e
+      if abort_on_error
+        raise e
+      else
+        FastlaneCore::UI.important("Gradle task #{task} failed but lane will continue: #{e.message}")
+      end
+    end
+  end
+
+  def __latest_artifact(globs)
+    files = Array(globs).flat_map { |pattern| Dir[File.join(android_ci_root, pattern)] }
+    return nil if files.empty?
+    files.max_by { |path| File.mtime(path) }
+  end
+
+  private_lane :__ensure_local_properties do |opts|
+    sdk_dir = opts[:sdk_dir] || ENV['ANDROID_SDK_ROOT'] || ENV['ANDROID_HOME']
+    if sdk_dir.to_s.strip.empty?
+      FastlaneCore::UI.important('ANDROID_SDK_ROOT not set; skipping local.properties generation')
+      next
+    end
+
+    target = File.join(android_ci_root, 'local.properties')
+    File.write(target, "sdk.dir=#{sdk_dir}\n")
+    FastlaneCore::UI.success("Wrote #{target}")
+    target
+  end
+
+  private_lane :__write_app_properties do |opts|
+    flavors = opts[:flavors] || %w[Dev Stage Prod]
+    flavors.each do |flavor|
+      env_key = "APP_PROPERTIES_#{flavor.upcase}"
+      relative = File.join('app', 'src', flavor, 'app.properties')
+      __write_optional_file(env_key: env_key, relative_path: relative)
+    end
+  end
+
+  private_lane :__write_google_services do |opts|
+    flavors = opts[:flavors] || %w[Dev Stage Prod]
+    flavors.each do |flavor|
+      env_key = "GOOGLE_SERVICES_#{flavor.upcase}"
+      relative = File.join('app', 'src', flavor, 'google-services.json')
+      __write_optional_file(env_key: env_key, relative_path: relative)
+    end
+  end
+
+  private_lane :__write_meta_properties do |opts|
+    env_key = opts[:env_key] || 'META_PROPERTIES'
+    __write_optional_file(env_key: env_key, relative_path: File.join('app', 'src', 'Prod', 'meta.properties'))
+  end
+
+  private_lane :__write_keystore_assets do |opts|
+    relative_path = opts[:keystore_relative_path] || ENV['KEYSTORE_RELATIVE_PATH'] || 'app/upload_keystore.jks'
+    keystore_file = __write_optional_file(
+      env_key: opts[:keystore_env_key] || 'KEYSTORE_FILE',
+      relative_path: relative_path
+    )
+
+    password = opts[:store_password] || ENV['KEYSTORE_PASSWORD']
+    key_alias = opts[:key_alias] || ENV['KEYSTORE_ALIAS']
+    key_password = opts[:key_password] || ENV['KEY_PASSWORD'] || password
+
+    if [keystore_file, password, key_alias].any?(&:nil?)
+      FastlaneCore::UI.important('Keystore not fully configured; skipping keystore.properties')
+      next
+    end
+
+    props = <<~PROPS
+      storeFile=#{relative_path}
+      storePassword=#{password}
+      keyAlias=#{key_alias}
+      keyPassword=#{key_password}
+    PROPS
+    File.write(File.join(android_ci_root, 'keystore.properties'), props)
+    FastlaneCore::UI.success('Wrote keystore.properties')
+  end
+
+  private_lane :__run_spotless do |opts|
+    task = opts[:task] || 'spotlessCheck'
+    __gradle_task(task: task, abort_on_error: false)
+  end
+
+  private_lane :__run_unit_tests do |opts|
+    flavor = (opts[:flavor] || ENV['CI_TEST_FLAVOR'] || 'Dev').capitalize
+    build_type = (opts[:build_type] || ENV['CI_TEST_BUILD_TYPE'] || 'Debug').capitalize
+    task = "test#{flavor}#{build_type}UnitTest"
+    __gradle_task(task: task, abort_on_error: false)
+  end
+
+  private_lane :__assemble_variant do |opts|
+    flavor = (opts[:flavor] || 'Dev').capitalize
+    build_type = (opts[:build_type] || 'Release').capitalize
+    mode = (opts[:mode] || 'assemble').capitalize
+    gradle_task = if mode.casecmp('bundle').zero?
+                    "bundle#{flavor}#{build_type}"
+                  else
+                    "assemble#{flavor}#{build_type}"
+                  end
+
+    properties = opts[:properties] || {}
+    __gradle_task(task: gradle_task, properties: properties)
+  end
+
+  private_lane :__upload_firebase do |opts|
+    require 'fastlane/plugin/firebase_app_distribution'
+
+    app_id = opts[:app_id] || ENV['FIREBASE_APP_ID']
+    unless app_id
+      FastlaneCore::UI.important('Firebase App ID missing; skipping Firebase upload')
+      next
+    end
+
+    groups = opts[:groups] || ENV['FIREBASE_TEST_GROUP']
+    testers = opts[:testers] || ENV['FIREBASE_TESTERS']
+    release_notes = opts[:release_notes] || ENV['FIREBASE_RELEASE_NOTES']
+    artifact = opts[:artifact_path] || __latest_artifact(%w[app/build/outputs/**/*.apk app/build/outputs/**/*.aab])
+    unless artifact && File.exist?(artifact)
+      FastlaneCore::UI.user_error!('Firebase upload requested but no artifact was found')
+    end
+
+    credentials_file = opts[:service_credentials_file] || __materialize_secret_file(env_key: 'FIREBASE_SERVICE_ACCOUNT', filename: 'firebase_service_account.json')
+
+    firebase_app_distribution(
+      app: app_id,
+      android_artifact_path: artifact,
+      release_notes: release_notes,
+      testers: testers,
+      groups: groups,
+      service_credentials_file: credentials_file,
+      firebase_cli_token: opts[:token] || ENV['FIREBASE_TOKEN']
+    )
+  end
+
+  private_lane :__upload_play_store do |opts|
+    track = opts[:track] || ENV['PLAY_STORE_TRACK'] || 'internal'
+    json_file = opts[:json_key] || __materialize_secret_file(env_key: 'GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS', filename: 'google-play-sa.json')
+    unless json_file && File.exist?(json_file)
+      FastlaneCore::UI.important('Google Play credentials missing; skipping Play Store upload')
+      next
+    end
+
+    release_status = opts[:release_status] || ENV['PLAY_STORE_RELEASE_STATUS'] || 'draft'
+    aab_path = opts[:artifact_path] || __latest_artifact('app/build/outputs/**/*.aab')
+    unless aab_path && File.exist?(aab_path)
+      FastlaneCore::UI.user_error!('Play Store upload requested but no .aab artifact was found')
+    end
+
+    upload_to_play_store(
+      json_key: json_file,
+      track: track,
+      release_status: release_status,
+      aab: aab_path
+    )
+  end
+
+  desc 'Create properties, google-services, meta, keystore and local.properties files'
+  lane :ci_seed_android_files do |opts|
+    __ensure_local_properties(opts)
+    __write_app_properties(opts)
+    __write_google_services(opts)
+    __write_meta_properties(opts)
+    __write_keystore_assets(opts)
+  end
+
+  desc 'Run Spotless (if available) and basic unit tests - mirrors tattoo-android PR workflow'
+  lane :ci_pr_checks do |opts|
+    ci_seed_android_files(opts)
+    __run_spotless(opts)
+    __run_unit_tests(opts)
+  end
+
+  desc 'Assemble Dev release artifacts and optionally upload to Firebase App Distribution'
+  lane :ci_dev_distribution do |opts|
+    ci_seed_android_files(opts)
+    __run_spotless(opts)
+    __run_unit_tests(flavor: opts[:test_flavor] || 'Dev', build_type: opts[:test_build_type] || 'Debug')
+    version_code = opts[:version_code] || ENV['PROJECT_BUILD_NUMBER'] || ENV['CI_PIPELINE_ID']
+    properties = {}
+    properties['versionCode'] = version_code if version_code
+    __assemble_variant(flavor: 'Dev', build_type: 'Release', properties: properties)
+
+    if opts[:upload_to_firebase] || ENV['CI_UPLOAD_FIREBASE'] == '1'
+      __upload_firebase(opts)
+    end
+  end
+
+  desc 'Bundle Prod release artifacts and optionally upload to the Play Store'
+  lane :ci_prod_play_store do |opts|
+    ci_seed_android_files(opts)
+    __run_spotless(opts)
+    __run_unit_tests(flavor: 'Prod', build_type: 'Release')
+
+    version_code = opts[:version_code] || ENV['PROJECT_BUILD_NUMBER']
+    version_name = opts[:version_name] || ENV['CI_RELEASE_TAG'] || ENV['CM_TAG']
+    props = {}
+    props['versionCode'] = version_code if version_code
+    props['versionName'] = version_name&.gsub(/^v/, '')
+
+    __assemble_variant(flavor: 'Prod', build_type: 'Release', mode: 'bundle', properties: props)
+
+    if opts[:upload_to_play_store] || ENV['CI_UPLOAD_PLAY_STORE'] == '1'
+      __upload_play_store(opts)
+    end
+  end
+
+  desc 'Utility lane to just run unit tests'
+  lane :ci_unit_tests do |opts|
+    __run_unit_tests(opts)
+  end
+
+  desc 'Utility lane to just run Spotless check'
+  lane :ci_static_analysis do |opts|
+    __run_spotless(opts)
+  end
+end

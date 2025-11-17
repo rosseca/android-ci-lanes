@@ -1,0 +1,6 @@
+.DS_Store
+/vendor/bundle
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+build
