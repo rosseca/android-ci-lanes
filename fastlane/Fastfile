@@ -177,14 +177,14 @@ platform :android do
 
   private_lane :__run_spotless do |opts|
     task = opts[:task] || 'spotlessCheck'
-    __gradle_task(task: task, abort_on_error: false)
+    __gradle_task(task: task, abort_on_error: true)
   end
 
   private_lane :__run_unit_tests do |opts|
     flavor = (opts[:flavor] || ENV['CI_TEST_FLAVOR'] || 'Dev').capitalize
     build_type = (opts[:build_type] || ENV['CI_TEST_BUILD_TYPE'] || 'Debug').capitalize
     task = "test#{flavor}#{build_type}UnitTest"
-    __gradle_task(task: task, abort_on_error: false)
+    __gradle_task(task: task, abort_on_error: true)
   end
 
   private_lane :__assemble_variant do |opts|
