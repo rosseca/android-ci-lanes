@@ -16,7 +16,9 @@ end
 def decode_payload(value, base64: true)
   return value.to_s if value.nil?
   return value.to_s unless base64
-  Base64.decode64(value)
+
+  normalized = value.to_s.gsub(/\s+/, '')
+  Base64.strict_decode64(normalized)
 rescue ArgumentError
   FastlaneCore::UI.important('Value did not look like Base64; falling back to raw string')
   value.to_s
