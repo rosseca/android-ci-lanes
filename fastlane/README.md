@@ -28,8 +28,8 @@ All helper logic lives in the same `Fastfile`, so importing this repo is enough.
 | `KEYSTORE_FILE` | Base64 keystore binary written to `app/upload_keystore.jks` (override via `KEYSTORE_RELATIVE_PATH`). |
 | `KEYSTORE_PASSWORD`, `KEYSTORE_ALIAS`, `KEY_PASSWORD` | Used for `keystore.properties`. |
 | `PROJECT_BUILD_NUMBER` | Passed as Gradle `-PversionCode` when present. |
-| `FIREBASE_APP_ID`, `FIREBASE_TEST_GROUP`, `FIREBASE_SERVICE_ACCOUNT`, `FIREBASE_TOKEN` | Drive Firebase App Distribution uploads. Supply Base64 JSON for the service account. |
-| `GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS`, `PLAY_STORE_TRACK`, `PLAY_STORE_RELEASE_STATUS` | Drive Play Store uploads via `upload_to_play_store`. |
+| `FIREBASE_APP_ID`, `FIREBASE_TEST_GROUP`, `FIREBASE_SERVICE_ACCOUNT`, `FIREBASE_TOKEN` | Drive Firebase App Distribution uploads. The service account may be passed as Base64 JSON, raw JSON, or an existing file path. |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS`, `PLAY_STORE_TRACK`, `PLAY_STORE_RELEASE_STATUS` | Drive Play Store uploads via `upload_to_play_store`. The service account may be passed as Base64 JSON, raw JSON, or an existing file path. |
 | `CI_UPLOAD_FIREBASE`, `CI_UPLOAD_PLAY_STORE` | Set to `1` to opt into uploads inside CI lanes. |
 
 ## Using from another repo
