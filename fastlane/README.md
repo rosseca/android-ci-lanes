@@ -9,8 +9,8 @@ Shared Android Fastlane lanes that mirror the tattoo-android Codemagic workflows
 | `ci_seed_android_files` | Re-creates `local.properties`, flavor-specific `app.properties`, `google-services.json`, `meta.properties`, and `keystore.properties` from Base64 env vars. |
 | `ci_pr_checks` | Runs the same setup as Codemagic PR workflow followed by `spotlessCheck` (if available) and `testDevDebugUnitTest`. |
 | `ci_pr_required` | Alias for `ci_pr_checks`, handy for marking the "required" Codemagic job. |
-| `ci_pr_optional` | Builds a Dev release artifact (and optionally uploads to Firebase) after the same setup/tests, suited for "optional" Codemagic jobs. |
-| `ci_dev_distribution` | Prepares files, runs checks, assembles `DevRelease`, and optionally uploads the latest APK/AAB to Firebase App Distribution. |
+| `ci_pr_optional` | Builds a Dev release artifact (and optionally uploads to Firebase) after the same setup/tests, suited for "optional" Codemagic jobs. Firebase notes are auto-generated unless explicitly provided. |
+| `ci_dev_distribution` | Prepares files, runs checks, assembles `DevRelease`, and optionally uploads the latest APK/AAB to Firebase App Distribution. Firebase notes are auto-generated unless explicitly provided. |
 | `ci_prod_play_store` | Prepares files, runs Prod unit tests, bundles `ProdRelease`, and can upload the generated AAB to the Play Store. |
 | `ci_unit_tests` | Convenience wrapper around a configurable Gradle unit test task. |
 | `ci_static_analysis` | Runs Spotless (skips gracefully if not configured). |
@@ -29,8 +29,11 @@ All helper logic lives in the same `Fastfile`, so importing this repo is enough.
 | `KEYSTORE_PASSWORD`, `KEYSTORE_ALIAS`, `KEY_PASSWORD` | Used for `keystore.properties`. |
 | `PROJECT_BUILD_NUMBER` | Passed as Gradle `-PversionCode` when present. |
 | `FIREBASE_APP_ID`, `FIREBASE_TEST_GROUP`, `FIREBASE_SERVICE_ACCOUNT`, `FIREBASE_TOKEN` | Drive Firebase App Distribution uploads. The service account may be passed as Base64 JSON, raw JSON, or an existing file path. |
+| `FIREBASE_RELEASE_NOTES`, `FIREBASE_RELEASE_NOTES_FILE` | Optional explicit Firebase release notes. When omitted, shared lanes generate notes from CI/git metadata. |
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS`, `PLAY_STORE_TRACK`, `PLAY_STORE_RELEASE_STATUS` | Drive Play Store uploads via `upload_to_play_store`. The service account may be passed as Base64 JSON, raw JSON, or an existing file path. |
 | `CI_UPLOAD_FIREBASE`, `CI_UPLOAD_PLAY_STORE` | Set to `1` to opt into uploads inside CI lanes. |
+
+Generated Firebase release notes prefer explicit overrides first, then fall back to shared metadata such as build number, workflow, branch, short commit SHA, commit title, PR number/title when available, and a short commit summary since the previous successful Codemagic build.
 
 ## Using from another repo
 
