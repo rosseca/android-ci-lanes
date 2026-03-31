@@ -1,5 +1,6 @@
 require 'base64'
 require 'fileutils'
+require 'shellwords'
 
 fastlane_version '2.220.0'
 
@@ -11,6 +12,15 @@ def android_ci_tmp_dir
   path = File.join(android_ci_root, 'fastlane', '.ci-cache')
   FileUtils.mkdir_p(path)
   path
+end
+
+def android_ci_sh(command, fallback: nil)
+  output = `cd #{Shellwords.escape(android_ci_root)} && #{command} 2>/dev/null`.to_s
+  return output.strip unless output.strip.empty?
+
+  fallback
+rescue StandardError
+  fallback
 end
 
 def decode_payload(value, base64: true)
@@ -25,6 +35,154 @@ rescue ArgumentError
 end
 
 platform :android do
+  def __present_string(value)
+    string = value.to_s.strip
+    return nil if string.empty?
+
+    string
+  end
+
+  def __ci_commit_sha
+    __present_string(
+      ENV['CM_COMMIT'] ||
+      ENV['GITHUB_SHA'] ||
+      ENV['CI_COMMIT_SHA'] ||
+      android_ci_sh('git rev-parse HEAD')
+    )
+  end
+
+  def __ci_previous_commit_sha
+    __present_string(
+      ENV['CM_PREVIOUS_COMMIT'] ||
+      ENV['CI_PREVIOUS_COMMIT_SHA']
+    )
+  end
+
+  def __ci_branch_name
+    __present_string(
+      ENV['CM_BRANCH'] ||
+      ENV['GITHUB_HEAD_REF'] ||
+      ENV['GITHUB_REF_NAME'] ||
+      ENV['BITRISE_GIT_BRANCH'] ||
+      ENV['CI_COMMIT_BRANCH'] ||
+      android_ci_sh('git rev-parse --abbrev-ref HEAD')
+    )
+  end
+
+  def __ci_workflow_name
+    __present_string(
+      ENV['CM_WORKFLOW_NAME'] ||
+      ENV['GITHUB_WORKFLOW'] ||
+      ENV['BITRISE_TRIGGERED_WORKFLOW_ID'] ||
+      ENV['CI_WORKFLOW_NAME']
+    )
+  end
+
+  def __ci_build_number
+    __present_string(
+      ENV['PROJECT_BUILD_NUMBER'] ||
+      ENV['BUILD_NUMBER'] ||
+      ENV['GITHUB_RUN_NUMBER'] ||
+      ENV['BITRISE_BUILD_NUMBER'] ||
+      ENV['CI_PIPELINE_ID']
+    )
+  end
+
+  def __release_notes_current_commit_message(commit_sha)
+    target = __present_string(commit_sha)
+    return nil unless target
+
+    android_ci_sh("git log --format=%B -n 1 #{Shellwords.escape(target)}")
+  end
+
+  def __release_notes_commit_subject(commit_sha)
+    target = __present_string(commit_sha)
+    return nil unless target
+
+    android_ci_sh("git log --format=%s -n 1 #{Shellwords.escape(target)}")
+  end
+
+  def __release_notes_pull_request_metadata(commit_sha)
+    pr_number = __present_string(
+      ENV['CM_PULL_REQUEST_NUMBER'] ||
+      ENV['PR_NUMBER']
+    )
+    pr_title = __present_string(
+      ENV['CM_PULL_REQUEST_TITLE'] ||
+      ENV['PR_TITLE']
+    )
+
+    message = __release_notes_current_commit_message(commit_sha)
+    return [pr_number, pr_title] if message.to_s.strip.empty?
+
+    lines = message.lines.map(&:strip)
+    merge_header = lines.find { |line| line.match?(/^Merge pull request #\d+/) }
+    if pr_number.nil? && merge_header
+      pr_number = merge_header[/#(\d+)/, 1]
+    end
+
+    if pr_title.nil? && merge_header
+      merge_index = lines.index(merge_header)
+      trailing = lines[(merge_index + 1)..] || []
+      pr_title = trailing.find { |line| !line.empty? }
+    end
+
+    [pr_number, pr_title]
+  end
+
+  def __release_notes_commit_lines(current_sha, previous_sha)
+    current = __present_string(current_sha)
+    return [] unless current
+
+    raw = if previous_sha.to_s.strip.empty?
+            android_ci_sh("git log --pretty=format:%s__SEP__%h -n 1 #{Shellwords.escape(current)}")
+          else
+            range = "#{Shellwords.escape(previous_sha)}..#{Shellwords.escape(current)}"
+            android_ci_sh("git log --pretty=format:%s__SEP__%h #{range}")
+          end
+    lines = raw.to_s.lines.map(&:strip).reject(&:empty?).map do |line|
+      subject, short_sha = line.split('__SEP__', 2)
+      next if subject.to_s.strip.empty?
+
+      short = __present_string(short_sha)
+      short ? "- #{subject} (#{short})" : "- #{subject}"
+    end.compact
+
+    lines = ["- #{__release_notes_commit_subject(current)}"] if lines.empty? && __release_notes_commit_subject(current)
+    lines.first(10)
+  end
+
+  def __default_firebase_release_notes(_opts = {})
+    commit_sha = __ci_commit_sha
+    commit_short = commit_sha&.slice(0, 8)
+    commit_subject = __release_notes_commit_subject(commit_sha)
+    pr_number, pr_title = __release_notes_pull_request_metadata(commit_sha)
+    commit_lines = __release_notes_commit_lines(commit_sha, __ci_previous_commit_sha)
+
+    lines = []
+    build_number = __ci_build_number
+    workflow_name = __ci_workflow_name
+    branch_name = __ci_branch_name
+
+    lines << "Build: #{build_number}" if build_number
+    lines << "Workflow: #{workflow_name}" if workflow_name
+    lines << "Branch: #{branch_name}" if branch_name
+    lines << "Commit: #{commit_short}" if commit_short
+    lines << "Commit title: #{commit_subject}" if commit_subject
+    lines << "PR: ##{pr_number}" if pr_number
+    lines << "PR title: #{pr_title}" if pr_title
+
+    if commit_lines.any?
+      lines << ''
+      header = __ci_previous_commit_sha ? 'Changes since last successful build:' : 'Included changes:'
+      lines << header
+      lines.concat(commit_lines)
+    end
+
+    notes = lines.join("\n").strip
+    notes.empty? ? nil : notes[0, 5000]
+  end
+
   def __write_optional_file(env_key:, relative_path:, base64: true, raw_value: nil, verbose_name: nil)
     payload = raw_value || ENV[env_key]
     if payload.to_s.empty?
@@ -215,6 +373,17 @@ platform :android do
     groups = opts[:groups] || ENV['FIREBASE_TEST_GROUP']
     testers = opts[:testers] || ENV['FIREBASE_TESTERS']
     release_notes = opts[:release_notes] || ENV['FIREBASE_RELEASE_NOTES']
+    release_notes_file = opts[:release_notes_file] || ENV['FIREBASE_RELEASE_NOTES_FILE']
+    if release_notes.to_s.strip.empty? && release_notes_file.to_s.strip != ''
+      release_notes_path = File.expand_path(release_notes_file, android_ci_root)
+      if File.exist?(release_notes_path)
+        release_notes = File.read(release_notes_path)
+        FastlaneCore::UI.message("Loaded Firebase release notes from #{release_notes_path}")
+      else
+        FastlaneCore::UI.important("Firebase release notes file not found at #{release_notes_path}; generating default notes")
+      end
+    end
+    release_notes = __default_firebase_release_notes(opts) if release_notes.to_s.strip.empty?
     artifact = opts[:artifact_path] || __latest_artifact(%w[app/build/outputs/**/*.apk app/build/outputs/**/*.aab])
     unless artifact && File.exist?(artifact)
       FastlaneCore::UI.user_error!('Firebase upload requested but no artifact was found')
