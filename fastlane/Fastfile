@@ -422,8 +422,18 @@ platform :android do
       FastlaneCore::UI.user_error!('Play Store upload requested but no .aab artifact was found')
     end
 
+    package_name =
+      opts[:package_name] ||
+      opts[:application_id] ||
+      ENV['PLAY_STORE_PACKAGE_NAME'] ||
+      ENV['ANDROID_PACKAGE_NAME']
+    if package_name.to_s.strip.empty?
+      FastlaneCore::UI.user_error!('Play Store upload requested but no package_name was provided')
+    end
+
     upload_to_play_store(
       json_key: json_file,
+      package_name: package_name,
       track: track,
       release_status: release_status,
       aab: aab_path
