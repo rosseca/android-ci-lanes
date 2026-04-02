@@ -164,19 +164,25 @@ platform :android do
     workflow_name = __ci_workflow_name
     branch_name = __ci_branch_name
 
+    lines << "PR title: #{pr_title}" if pr_title
+
     lines << "Build: #{build_number}" if build_number
     lines << "Workflow: #{workflow_name}" if workflow_name
     lines << "Branch: #{branch_name}" if branch_name
     lines << "Commit: #{commit_short}" if commit_short
     lines << "Commit title: #{commit_subject}" if commit_subject
     lines << "PR: ##{pr_number}" if pr_number
-    lines << "PR title: #{pr_title}" if pr_title
 
     if commit_lines.any?
-      lines << ''
       header = __ci_previous_commit_sha ? 'Changes since last successful build:' : 'Included changes:'
-      lines << header
-      lines.concat(commit_lines)
+      ordered = []
+      ordered.concat(lines.first(1)) if pr_title
+      ordered << '' if pr_title
+      ordered << header
+      ordered.concat(commit_lines)
+      ordered << '' unless lines[(pr_title ? 1 : 0)..].to_a.empty?
+      ordered.concat(lines[(pr_title ? 1 : 0)..].to_a)
+      lines = ordered
     end
 
     notes = lines.join("\n").strip
