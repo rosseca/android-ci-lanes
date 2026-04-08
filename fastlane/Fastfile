@@ -416,7 +416,13 @@ platform :android do
       next
     end
 
-    release_status = opts[:release_status] || ENV['PLAY_STORE_RELEASE_STATUS'] || 'draft'
+    release_status = opts[:release_status] || ENV['PLAY_STORE_RELEASE_STATUS']
+    release_status ||= if track.to_s.casecmp('internal').zero?
+      # Internal-track uploads should become available immediately unless a caller overrides the status.
+      'completed'
+    else
+      'draft'
+    end
     aab_path = opts[:artifact_path] || __latest_artifact('app/build/outputs/**/*.aab')
     unless aab_path && File.exist?(aab_path)
       FastlaneCore::UI.user_error!('Play Store upload requested but no .aab artifact was found')
