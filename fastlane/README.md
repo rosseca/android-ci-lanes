@@ -30,7 +30,7 @@ All helper logic lives in the same `Fastfile`, so importing this repo is enough.
 | `PROJECT_BUILD_NUMBER` | Passed as Gradle `-PversionCode` when present. |
 | `FIREBASE_APP_ID`, `FIREBASE_TEST_GROUP`, `FIREBASE_SERVICE_ACCOUNT`, `FIREBASE_TOKEN` | Drive Firebase App Distribution uploads. The service account may be passed as Base64 JSON, raw JSON, or an existing file path. |
 | `FIREBASE_RELEASE_NOTES`, `FIREBASE_RELEASE_NOTES_FILE` | Optional explicit Firebase release notes. When omitted, shared lanes generate notes from CI/git metadata. |
-| `GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS`, `PLAY_STORE_TRACK`, `PLAY_STORE_RELEASE_STATUS` | Drive Play Store uploads via `upload_to_play_store`. The service account may be passed as Base64 JSON, raw JSON, or an existing file path. |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS`, `PLAY_STORE_TRACK`, `PLAY_STORE_RELEASE_STATUS` | Drive Play Store uploads via `upload_to_play_store`. The service account may be passed as Base64 JSON, raw JSON, or an existing file path. If no release status is provided, internal-track uploads default to `completed`; other tracks default to `draft`. |
 | `CI_UPLOAD_FIREBASE`, `CI_UPLOAD_PLAY_STORE` | Set to `1` to opt into uploads inside CI lanes. |
 
 Generated Firebase release notes prefer explicit overrides first, then fall back to shared metadata such as build number, workflow, branch, short commit SHA, commit title, PR number/title when available, and a short commit summary since the previous successful Codemagic build.
